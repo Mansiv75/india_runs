@@ -232,7 +232,8 @@ Each `reasoning` cell is assembled to satisfy all six Stage-4 checks:
 ## 12. Phase 7 — Assembly & validation (ONLINE -> output)
 
 - Take top-100 by score; assign ranks 1-100; enforce non-increasing score.
-- Write `submission.csv`: `candidate_id,rank,score,reasoning`, UTF-8.
+- **Always emit exactly 100 rows (H3).** The shortlist (K ~ 1000-2000) is far larger than 100, so 100 ranked rows are always available; if DQ/honeypot penalties thin the strong-fit set, remaining slots are backfilled by the next-best shortlisted candidates (framed honestly as low-confidence fillers per Section 11). Never 99, never 101.
+- Write the CSV `candidate_id,rank,score,reasoning`, UTF-8. Working name `submission.csv`; **final submission file is named `<participant_id>.csv`** (H3).
 - **Last step of the run:** invoke `validate_submission.py` on the output; fail the run loudly if it reports any error (H3). Never ship unvalidated.
 
 ---
@@ -251,10 +252,10 @@ No ground truth exists, so we validate by methodology, not by submitting:
 
 ## 14. Reproducibility & delivery (OFFLINE) — H5/H6
 
-- `README.md`: single reproduce command, e.g. `python rank.py --candidates ./candidates.jsonl --out ./submission.csv`, plus the precompute commands and as-of date.
-- Pinned `requirements.txt`; committed `artifacts/` (or a one-command regenerator).
+- `README.md`: single reproduce command, e.g. `python rank.py --candidates ./candidates.jsonl.gz --out ./<participant_id>.csv --as-of <DATE>`, plus the precompute commands and the pinned as-of date.
+- **Two pinned dependency sets** (STACK.md 0): `requirements.txt` (runtime — no torch/network) and `requirements-precompute.txt` (offline). Installed via **uv**; committed `artifacts/` (or a one-command regenerator).
 - `submission_metadata.yaml` at repo root from the bundle template.
-- **Sandbox:** HF Spaces / Streamlit / Colab running the ranker on a <=100 candidate sample within budget.
+- **Sandbox:** HF Spaces + Gradio running the ranker on a <=100 candidate sample within budget.
 - **Git history:** genuine commit-per-phase iteration, not a single dump.
 - AI-tool usage declared honestly.
 

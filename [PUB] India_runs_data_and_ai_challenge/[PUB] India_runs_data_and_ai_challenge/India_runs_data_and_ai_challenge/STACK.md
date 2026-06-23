@@ -88,7 +88,7 @@ Runtime memory check: `emb.npy` ~147 MB (100K x 384 x 4B) + flat features parque
 
 | Concern | Choice | Why |
 |---|---|---|
-| Sandbox | **HF Spaces + Gradio** | Free CPU tier; runs the ranker on a <= 100-candidate sample within budget. Gradio chosen: native HF Spaces fit, minimal boilerplate for a single input -> output (run ranker -> show top-100 table) demo. |
+| Sandbox | **HF Spaces + Gradio** | Free CPU tier; runs the ranker on a <= 100-candidate sample within budget. Gradio chosen: native HF Spaces fit, minimal boilerplate for a single input -> output (run ranker -> show top-100 table) demo. **Gradio is a sandbox-only dep** (its own `requirements-sandbox.txt`); `rank.py` must never import it, so the timed runtime stays clean. |
 | Lint / format | **`ruff`** | Fast, single tool; optional but keeps the repo clean for review. |
 | Tests | **`pytest`** | Gold-set ordering, H3 invariants, honeypot-rate assertion, validator pass. |
 

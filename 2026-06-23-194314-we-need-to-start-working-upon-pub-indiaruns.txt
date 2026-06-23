@@ -1,0 +1,1008 @@
+ ▐▛███▜▌   Claude Code v2.1.186
+▝▜█████▛▘  Opus 4.8 · Claude Team
+  ▘▘ ▝▝    E:\india_runs
+
+
+❯ we need to start working upon @"[PUB] India_runs_data_and_ai_challenge/[PUB]  
+  India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/DESIGN.md"  
+  first tell me is this high level diagram complete or anything left to add     
+  then we'll move to downstream expansion                                       
+  ⎿  Read [PUB] India_runs_data_and_ai_challenge\[PUB] 
+     India_runs_data_and_ai_challenge\India_runs_data_and_ai_challenge\DESIGN.md
+     (264 lines)
+  ⎿  Loaded [PUB] India_runs_data_and_ai_challenge\[PUB] 
+     India_runs_data_and_ai_challenge\India_runs_data_and_ai_challenge\CLAUDE.md
+
+● Read both DESIGN.md and CLAUDE.md. Here's my assessment of the Section 2
+  diagram specifically.
+
+  Verdict
+
+  The diagram is structurally complete on the thing that matters most — the H1 
+  compute firewall. The OFFLINE/ONLINE split is clean, the unbounded-precompute
+  vs. ≤5-min-ranking boundary is explicit, and steps [0]–[7] match the phase
+  sections downstream. That part I would defend as-is.
+
+  But it's missing a few things that the body of the doc already commits to, so
+  right now the diagram under-represents the design. Five gaps, in priority
+  order:
+
+  1. The eval harness → weights feedback loop is absent (biggest one).
+  Section 9.2 and 13 make the w1..w10 weights and the availability floor come
+  from the eval harness, not from hand-tuning. But the diagram shows a clean
+  linear flow with no eval/ node and no weights artifact. Whoever reads the
+  diagram can't see where the tunable numbers originate. This is also an
+  interview-defense point ("where did your weights come from?") — it should be
+  visible.
+
+  2. No weights artifact, and the ONLINE load line is incomplete.
+  - rank.py loads features.parquet + emb.npy + bm25.pkl + jd_rubric.yaml — but
+  step [4a] dense retrieval needs jd_emb.npy, which is produced in [0] and never
+  loaded. That's an actual inconsistency, not just a presentation gap.
+  - The tuned weights need to live somewhere loadable (either a weights.yaml or
+  folded into jd_rubric.yaml). Pick one and show it.
+
+  3. The pinned "as-of" date input isn't shown.
+  Section 5 makes it reproducibility-critical (H6) and it's baked into the
+  recency/availability features at normalize time. It's an OFFLINE input to step
+  [1]. Worth showing as an explicit pinned parameter, since it's exactly the
+  kind of nondeterminism reviewers probe.
+
+  4. Quarantine path from [1] not shown. Section 5 validates against the schema
+  and quarantines malformed rows. Minor, but the diagram implies every input row
+  flows straight through.
+
+  5. Step [7] collapses four sub-steps. Section 12 is sort → assign ranks →
+  enforce non-increasing score → validate. The diagram shows "top-100 CSV ->
+  validate". The monotonic-enforcement step is an H3 disqualifier guard and is
+  worth making visible. Lower priority — this is detail.
+
+  What I'd not add
+
+  The sandbox deliverable (H5), the conditional structured-prefilter recall leg
+  (9.1), and the multiplicative availability branch are all either delivery
+  artifacts or already-implied detail — they belong in the prose, not the
+  top-level diagram.
+
+  So: gaps 1 and 2 are real and I'd fix them before downstream expansion
+  (especially the jd_emb.npy load inconsistency). Gap 3 is cheap and high-value
+  for the interview. 4 and 5 are polish.
+
+  Want me to redraw the Section 2 diagram with the eval/weights loop, the
+  corrected load line, and the as-of input — or hold off and fold these into the
+  downstream expansion pass?
+
+✻ Churned for 45s
+
+❯ lets add the missing elements then                                            
+
+● Update([PUB] India_runs_data_and_ai_challenge\[PUB] India_runs_data_and_ai_cha
+        llenge\India_runs_data_and_ai_challenge\DESIGN.md)
+  ⎿  Added 16 lines, removed 8 lines
+      20  
+      21  ```
+      22  OFFLINE  (precompute/ — unbounded time, may use network/local m
+          odels)
+      23 +  --as-of DATE  (pinned for reproducibility; baked into tempora
+         +l/recency features)                                            
+      24    candidates.jsonl.gz
+      24 -     -> [1] ingest + normalize        -> normalized.parquet    
+      25 +     -> [1] ingest + normalize        -> normalized.parquet  (+
+         + quarantine.jsonl for malformed rows)                          
+      26       -> [2] feature extraction        -> features.parquet   (th
+          e core IP)
+      27       -> [3] embeddings + BM25 index   -> emb.npy, bm25.pkl
+      28    job_description.md
+      28 -     -> [0] JD rubric spec            -> jd_rubric.yaml (+ jd_e
+         -mb.npy)                                                        
+      29 +     -> [0] JD rubric spec            -> jd_rubric.yaml, jd_emb
+         +.npy                                                           
+      30  
+      31 +  eval/  (self-eval harness — Section 13)                      
+      32 +     gold mini-set + ablations                                 
+      33 +     -> [E] tune weights & availability floor -> weights.yaml  
+      34 +            ^________________________ reads features.parquet, s
+         +cores gold set,                                                
+      35 +                                      feeds tuned w1..w10 + flo
+         +or back to [4b]                                                
+      36 +                                                               
+      37  ONLINE  (rank.py — <= 5 min, CPU only, network OFF)
+      31 -  load features.parquet + emb.npy + bm25.pkl + jd_rubric.yaml  
+      32 -     -> [4a] hybrid retrieve top-K shortlist (BM25 + dense)    
+      33 -     -> [4b] deep feature rerank  (fit x availability - penalti
+         -es)                                                            
+      38 +  load features.parquet + emb.npy + bm25.pkl + jd_rubric.yaml +
+         + jd_emb.npy + weights.yaml                                     
+      39 +     -> [4a] hybrid retrieve top-K shortlist (BM25 + dense, use
+         +s jd_emb.npy)                                                  
+      40 +     -> [4b] deep feature rerank  (fit x availability - penalti
+         +es; weights from weights.yaml)                                 
+      41       -> [5]  honeypot/trap consistency layer
+      42       -> [6]  grounded reasoning generation
+      36 -     -> [7]  top-100 CSV  -> run validate_submission.py        
+      43 +     -> [7]  assemble: sort -> assign ranks 1-100 -> enforce no
+         +n-increasing score (H3)                                        
+      44 +             -> top-100 CSV -> run validate_submission.py      
+      45  ```
+      46  
+      47  Repo layout enforces the firewall:
+      48  ```
+      49  precompute/   build_features.py, build_index.py, build_rubric.p
+          y
+      50  rank.py       the ONLY timed step; produces submission.csv
+      43 -artifacts/    features.parquet, emb.npy, bm25.pkl, jd_rubric.ya
+         -ml  (committed or regenerated)                                 
+      44 -eval/         gold set + self-eval harness                     
+      51 +artifacts/    features.parquet, emb.npy, bm25.pkl, jd_rubric.ya
+         +ml, jd_emb.npy, weights.yaml  (committed or regenerated)       
+      52 +eval/         gold set + self-eval harness (produces weights.ya
+         +ml)                                                            
+      53  ```
+      54  
+      55  ---
+
+● The diagram now reflects the five fixes. Let me make two small consistency
+  edits downstream so the new weights.yaml artifact isn't orphaned — the eval
+  section should name what it emits, and the rerank section should point at it.
+
+● Update([PUB] India_runs_data_and_ai_challenge\[PUB] India_runs_data_and_ai_cha
+        llenge\India_runs_data_and_ai_challenge\DESIGN.md)
+  ⎿  Added 1 line, removed 1 line
+      195  score = fit_raw * disqualifier_factor * availability_multiplie
+           r
+      196  ```
+      197  
+      198 -- Weights `w*` `[tunable]` via eval; initial guess emphasizes 
+          -career-substance (w2, w3, w4) over skill-list and semantic (w1
+          - moderate, w9 small).                                         
+      198 +- Weights `w*` `[tunable]` via eval, loaded at runtime from `w
+          +eights.yaml` (emitted by the eval harness, Section 13); initia
+          +l guess emphasizes career-substance (w2, w3, w4) over skill-li
+          +st and semantic (w1 moderate, w9 small).                      
+      199  - Fully vectorized in numpy over the shortlist.
+      200  - **Tie-break (matches validator):** secondary signal (e.g. av
+           ailability) then `candidate_id` ascending, so equal scores nev
+           er violate H3.
+      201  
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ lets sketch out the stack.md what stack are we gonna be using                 
+
+● Let me sketch STACK.md, driven by the hard constraints (H1 especially) rather
+  than a generic library wishlist. The single most important stack decision is
+  splitting dependencies so the timed rank.py path never imports
+  torch/transformers/network libs.
+
+● Write([PUB] India_runs_data_and_ai_challenge\[PUB] India_runs_data_and_ai_chal
+       lenge\India_runs_data_and_ai_challenge\STACK.md)
+  ⎿  Wrote 113 lines to [PUB] India_runs_data_and_ai_challenge\[PUB] India_
+     runs_data_and_ai_challenge\India_runs_data_and_ai_challenge\STACK.md
+      1 # STACK.md — Technology choices for the Redrob ranker
+      3 Companion to `DESIGN.md`. Every choice here is justified against 
+        the hard constraints in `CLAUDE.md` (H1-H6). Read the firewall ru
+        local models, unbounded time); the ONLINE `rank.py` path is CPU-o
+        nforce that physically, not by discipline alone.
+      4 
+      6 
+      7 ## 0. The one decision that shapes everything: two dependency set
+      8 
+         this with **two pinned requirement files**, not one:
+     … +174 lines (ctrl+o to expand)
+
+● Created STACK.md next to DESIGN.md. The structure mirrors the OFFLINE/ONLINE
+  firewall, and the headline decision is the two-requirements split — rank.py
+  physically cannot import torch/transformers/network libs because they live
+  only in requirements-precompute.txt. That's the cleanest way to make H1 a
+  structural guarantee rather than a thing we have to remember.
+
+  A few things I locked with recommendations: polars + pyarrow for the build,
+  bm25s over rank_bm25 (much faster at 100K online), no FAISS (exact numpy
+  cosine is milliseconds at this scale), and pure-Python deterministic reasoning
+  (no Jinja, no LLM).
+
+  Section 9 lists four genuine forks worth your call before I lock pins:
+
+● User answered Claude's questions:
+  ⎿  · Dataframe library for the offline build (ingestion + feature extraction)?
+     → polars but if its gonna increase development complexity then pandas 
+     · Which CPU embedding model for the dense retrieval leg? → keep this open 
+     · Sandbox framework for the mandatory HF Spaces demo (H5)? → keep this open
+     too 
+     · Documented install path for reproducibility (H6)? → uv (Recommended)
+
+● Noted. Let me fold these into STACK.md: uv locked, polars-with-pandas-fallback
+  made explicit, and embeddings + sandbox left as open decisions rather than
+  pre-recommended.
+
+● Update([PUB] India_runs_data_and_ai_challenge\[PUB] India_runs_data_and_ai_cha
+        llenge\India_runs_data_and_ai_challenge\STACK.md)
+  ⎿  Added 1 line, removed 1 line
+      20  | Concern | Choice | Why |
+      21  |---|---|---|
+      22  | Language | **Python 3.11** (pinned) | Mature CPU wheels for e
+          very dep below; avoids bleeding-edge 3.12/3.13 wheel gaps for s
+          entence-transformers/torch. |
+      23 -| Env / install | **uv** (preferred) or plain `venv` + `pip` | 
+         -uv gives fast, lockable, reproducible installs (H6). `requireme
+         -nts*.txt` committed regardless so reviewers need no extra tooli
+         -ng. |                                                          
+      23 +| Env / install | **uv** (locked) | Fast, lockable, reproducibl
+         +e installs (H6). `requirements*.txt` committed regardless so re
+         +viewers need no extra tooling. |                               
+      24  | Determinism | pinned `--as-of` date, fixed seeds, pinned mode
+          l revision | No `Date.now()`/random in the scored path; reprodu
+          cibility is H6. |
+      25  
+      26  ---
+
+● Update([PUB] India_runs_data_and_ai_challenge\[PUB] India_runs_data_and_ai_cha
+        llenge\India_runs_data_and_ai_challenge\STACK.md)
+  ⎿  Added 1 line, removed 1 line
+      31  |---|---|---|
+      32  | Read `candidates.jsonl.gz` | stdlib `gzip` (text mode) + **`o
+          rjson`** | Stream line-by-line, never materialize 100K raw reco
+          rds in RAM (DESIGN 5). orjson parses ~2-3x faster than stdlib j
+          son. |
+      33  | Schema validation | **`fastjsonschema`** against `candidate_s
+          chema.json` | Compiles the provided schema once, validates 100K
+           rows fast; failures go to `quarantine.jsonl` instead of crashi
+          ng the batch. Using the given schema directly avoids model drif
+          t. |
+      34 -| Dataframe / compute | **`polars`** | Lower memory + faster th
+         -an pandas at 100K with nested lists (career_history, skills) — 
+         -matters for the offline build and keeps us honest on memory. pa
+         -ndas acceptable but not preferred. |                           
+      34 +| Dataframe / compute | **`polars`** (fall back to `pandas` if 
+         +it raises dev complexity) | Lower memory + faster than pandas a
+         +t 100K with nested lists (career_history, skills). Decision: st
+         +art with polars; if nested-list handling or team familiarity sl
+         +ows the build, switch to pandas — output parquet contract is id
+         +entical either way. |                                          
+      35  | Parquet IO | **`pyarrow`** | Backing engine for `normalized.p
+          arquet` / `features.parquet`; columnar, typed, compact. |
+      36  
+      37  ---
+
+● Update([PUB] India_runs_data_and_ai_challenge\[PUB] India_runs_data_and_ai_cha
+        llenge\India_runs_data_and_ai_challenge\STACK.md)
+  ⎿  Added 1 line, removed 1 line
+      52  
+      53  | Concern | Choice | Why |
+      54  |---|---|---|
+      55 -| Dense embeddings | **`sentence-transformers`** with **`BAAI/b
+         -ge-small-en-v1.5`** (384-d) | CPU-fast, strong retrieval qualit
+         -y, small footprint. Encode candidates + JD offline -> `emb.npy`
+         -, `jd_emb.npy` (float32, L2-normalized). `torch` (CPU wheel) li
+         -ves here, OFFLINE only. Alt: `intfloat/e5-small-v2`. |         
+      55 +| Dense embeddings | **`sentence-transformers`**; model **OPEN*
+         +* (`bge-small-en-v1.5` vs `e5-small-v2`) | CPU-fast 384-d model
+         +s, encoded offline -> `emb.npy`, `jd_emb.npy` (float32, L2-norm
+         +alized). `torch` (CPU wheel) lives here, OFFLINE only. Model ch
+         +oice deferred — decide during indexing build, then pin the exac
+         +t revision for reproducibility. |                              
+      56  | Lexical index | **`bm25s`** | numpy/scipy-sparse BM25 — far f
+          aster than pure-python `rank_bm25` for scoring 100K at online t
+          ime; serializes to `bm25.pkl`. |
+      57  
+      58  Embeddings are precomputed to `.npy`; **the runtime never loads
+           torch or the model** — it does cosine in numpy.
+
+● Update([PUB] India_runs_data_and_ai_challenge\[PUB] India_runs_data_and_ai_cha
+        llenge\India_runs_data_and_ai_challenge\STACK.md)
+  ⎿  Added 1 line, removed 1 line
+      88  
+      89  | Concern | Choice | Why |
+      90  |---|---|---|
+      91 -| Sandbox | **HF Spaces + Streamlit** | Free CPU tier; runs the
+         - ranker on a <= 100-candidate sample within budget. (Gradio is 
+         -the alternative.) |                                            
+      91 +| Sandbox | **HF Spaces** + framework **OPEN** (Streamlit vs Gr
+         +adio) | Free CPU tier; runs the ranker on a <= 100-candidate sa
+         +mple within budget. Framework choice deferred to when we build 
+         +the demo. |                                                    
+      92  | Lint / format | **`ruff`** | Fast, single tool; optional but 
+          keeps the repo clean for review. |
+      93  | Tests | **`pytest`** | Gold-set ordering, H3 invariants, hone
+          ypot-rate assertion, validator pass. |
+      94  
+
+● Update([PUB] India_runs_data_and_ai_challenge\[PUB] India_runs_data_and_ai_cha
+        llenge\India_runs_data_and_ai_challenge\STACK.md)
+  ⎿  Added 7 lines, removed 5 lines
+      103  
+      104  ---
+      105  
+      106 -## 9. Decisions to confirm before we lock pins                
+      106 +## 9. Decision log                                            
+      107  
+      108 -1. **polars vs pandas** for the offline build — recommending p
+          -olars (memory/speed); pandas if you prefer ecosystem familiari
+          -ty for the interview defense.                                 
+      109 -2. **Embedding model** — `bge-small-en-v1.5` (recommended) vs 
+          -`e5-small-v2`. Both CPU-fast; lock one version/revision for re
+          -producibility.                                                
+      110 -3. **Sandbox framework** — Streamlit (recommended) vs Gradio o
+          -n HF Spaces.                                                  
+      111 -4. **uv vs pip** as the documented install path (committing `r
+          -equirements*.txt` either way).                                
+      108 +| Decision | Status | Notes |                                 
+      109 +|---|---|---|                                                 
+      110 +| Install path | **Locked: uv** | Commit `requirements*.txt` t
+          +oo. |                                                         
+      111 +| Dataframe | **Locked: polars, pandas fallback** | Switch to 
+          +pandas only if polars raises dev complexity; parquet contract 
+          +unchanged. |                                                  
+      112 +| Embedding model | **OPEN** | `bge-small-en-v1.5` vs `e5-smal
+          +l-v2`; decide at indexing build, pin revision. |              
+      113 +| Sandbox framework | **OPEN** | Streamlit vs Gradio on HF Spa
+          +ces; decide at demo build. |                                  
+      114  
+      115  > Per CLAUDE.md: if any pin or addition risks pulling network/
+           torch into the timed path, stop and ask before committing it.
+
+● STACK.md is updated with your calls:
+
+  - uv — locked as the install path.
+  - polars with a pandas fallback — start on polars; switch only if nested-list
+  handling slows the build. The features.parquet contract is identical either
+  way, so this can't leak into the rest of the pipeline.
+  - Embedding model and sandbox framework — both marked OPEN in the decision
+  log, to settle when we build the indexing step and the demo respectively.
+
+  The doc now has a clean decision-log table (Section 9) tracking locked vs.
+  open, so nothing gets silently assumed downstream.
+
+  Two things worth flagging before we move on, both tied to leaving the
+  embedding model open:
+  - The query:/passage: prefix convention differs between bge and e5, and it has
+  to be applied identically at offline-encode time and to the JD. Whichever we
+  pick, that convention gets pinned alongside the model revision — I'll treat it
+  as part of the "lock the model" step.
+  - It doesn't block anything upstream: ingestion, normalization, and feature
+  extraction don't depend on the model choice, so we can build those first and
+  decide the model when we reach Phase 3.
+
+  Ready to move to the downstream expansion whenever you are — that's the
+  per-phase detail (data model, feature definitions, scoring) we deferred from
+  the DESIGN pass.
+
+✻ Brewed for 2m 44s
+❯ wait what vector db are we using ?                                            
+
+● Short answer: none. We're deliberately not using a vector DB.
+
+  Here's the reasoning (it's in STACK.md Section 5 and 8):
+
+  At 100K candidates with 384-dim embeddings, the entire matrix is ~147 MB (100K
+  × 384 × 4 bytes). An exact brute-force cosine in numpy over that is
+  milliseconds on CPU — jd_emb @ emb.T, one matmul. A vector DB
+  (Pinecone/Weaviate/Qdrant/Milvus/FAISS) buys you approximate nearest-neighbor
+  speed that we simply don't need at this scale, and every one of them is either
+  a network service (violates H1 network-off) or an extra heavy dependency in
+  the timed rank.py path.
+
+  So the dense retrieval leg is:
+  - Offline: sentence-transformers encodes everything → emb.npy, jd_emb.npy
+  (float32, L2-normalized). torch lives here, offline only.
+  - Online: load the .npy, exact cosine in numpy, fuse with BM25 via
+  reciprocal-rank fusion. No index server, no ANN library.
+
+  There's a subtlety worth naming, since the JD itself lists
+  "Pinecone/Weaviate/Qdrant/FAISS in production" as a must-have skill (DESIGN
+  4.1 vector_db_or_hybrid_search). That's about what we look for in candidates,
+  not what we build the ranker with. Two different things — easy to conflate,
+  and a fair question to get at the interview.
+
+  The one caveat already in the doc: FAISS is the documented scale-out path for 
+  200K+, where brute-force starts to cost real wall-clock. We note it as the
+  upgrade lever but don't pull it into v1 — keeps the runtime lean and H1-safe.
+
+  So if anyone asks at the interview "why no vector DB?", the answer is: exact
+  search is faster than the complexity at this scale, and it keeps the timed
+  path free of network and heavy deps.
+
+✻ Cogitated for 13s
+
+❯ what is a  sandbox framework what is it used for                              
+
+● Good question — "sandbox framework" is two things stuck together, so let me
+  unpack both.
+
+  What it is
+
+  In this hackathon it's not a security sandbox. It comes straight from H5 in
+  CLAUDE.md:
+
+  ▎ A working sandbox link (HF Spaces / Streamlit / Replit / Colab / public 
+  ▎ Docker / Binder) is mandatory and must run the ranker on a ≤100-candidate 
+  ▎ sample within the CPU budget.
+
+  So "sandbox" = a publicly hosted, runnable demo of your ranker that a judge
+  can open in a browser and execute without installing anything on their own
+  machine. The "framework" is just the tool you use to build that web page
+  around your code.
+
+  What it's used for
+
+  The judges can't trust a CSV at face value — anyone can hand-craft 100 rows.
+  The sandbox is proof the pipeline actually runs and produces those rankings.
+  It's the reproducibility check (ties to H6): they click a button, your ranker
+  scores a small sample of candidates live, and they see real output. It defends
+  against "this was generated by hand / by a hidden LLM call / doesn't actually
+  run in budget."
+
+  The frameworks (the "OPEN" choice in STACK.md)
+
+  These are Python libraries that turn a script into a web app with almost no
+  web code:
+
+  - Streamlit — you write st.dataframe(results), st.button("Rank"), etc., and it
+  renders a web UI. Good for a simple "upload/select a sample → run → show
+  ranked table" page.
+  - Gradio — similar idea, even less boilerplate for a single input→output demo.
+  Pairs natively with HF Spaces.
+
+  And HF Spaces (Hugging Face Spaces) is the hosting — a free CPU server that
+  runs your Streamlit/Gradio app at a public URL. So the full picture is: HF 
+  Spaces (host) + Streamlit or Gradio (the UI framework) wrapping rank.py (your 
+  actual code).
+
+  What ours specifically needs to do
+
+  A minimal page that:
+  1. loads the small sample (≤100 candidates) and the precomputed artifacts,
+  2. runs rank.py on CPU within the ≤5-min / 16-GB budget,
+  3. displays the top-100 table — candidate_id, rank, score, reasoning.
+
+  That's it. It's a thin wrapper over the ranker, not new logic — which is
+  exactly why we deferred picking Streamlit vs Gradio until we build the demo.
+  The ranking engine doesn't care which one we choose.
+
+✻ Cooked for 16s
+
+❯ what do you recxommend ?                                                      
+
+● Gradio for this specific job.
+
+  Here's the reasoning, tied to what our demo actually needs:
+
+  Our sandbox is a thin wrapper — pick a sample, run rank.py, show a 100-row
+  table. That's a single input→output flow, which is exactly Gradio's sweet
+  spot. The deciding factors:
+
+  1. Native HF Spaces fit. Gradio is made by Hugging Face, so on Spaces it's the
+  path of least resistance — less config, fewer surprises, more deployment
+  examples to crib from. Since HF Spaces is our host, this matters.
+  2. Less boilerplate for input→output. gr.Interface(fn=run_ranker, inputs=..., 
+  outputs=gr.Dataframe()) is close to the whole app. Streamlit's
+  rerun-on-every-interaction model means you fight st.session_state and caching
+  to stop the ranker re-running on every widget tweak — avoidable friction for a
+  one-shot demo.
+  3. It's a demo, not a dashboard. Streamlit wins when you want lots of
+  interactive widgets, charts, exploration. We don't — we want "click, run, see
+  the table." Gradio's narrower scope is an advantage here.
+
+  When I'd flip to Streamlit: if we decide the sandbox should double as an
+  exploration tool for the interview — e.g. toggle weight sliders, show the
+  feature breakdown per candidate, eval-harness charts. Streamlit is nicer for
+  that richer, multi-widget story. If the sandbox is purely the H5 "proof it
+  runs" artifact, Gradio is the leaner choice.
+
+  My call: Gradio, unless you want the sandbox to also be an interactive talking
+  point at the Stage-5 interview — then Streamlit. Want me to lock Gradio in
+  the STACK.md decision log, or leave it OPEN until we see whether we want the
+  interactive-exploration angle?
+
+✻ Sautéed for 11s
+
+❯ ok gradio it is                                                               
+
+● Locking Gradio in the decision log.
+
+● Update([PUB] India_runs_data_and_ai_challenge\[PUB] India_runs_data_and_ai_cha
+        llenge\India_runs_data_and_ai_challenge\STACK.md)
+  ⎿  Added 1 line, removed 1 line
+      88  
+      89  | Concern | Choice | Why |
+      90  |---|---|---|
+      91 -| Sandbox | **HF Spaces** + framework **OPEN** (Streamlit vs Gr
+         -adio) | Free CPU tier; runs the ranker on a <= 100-candidate sa
+         -mple within budget. Framework choice deferred to when we build 
+         -the demo. |                                                    
+      91 +| Sandbox | **HF Spaces + Gradio** | Free CPU tier; runs the ra
+         +nker on a <= 100-candidate sample within budget. Gradio chosen:
+         + native HF Spaces fit, minimal boilerplate for a single input -
+         +> output (run ranker -> show top-100 table) demo. |            
+      92  | Lint / format | **`ruff`** | Fast, single tool; optional but 
+          keeps the repo clean for review. |
+      93  | Tests | **`pytest`** | Gold-set ordering, H3 invariants, hone
+          ypot-rate assertion, validator pass. |
+      94  
+
+● Update([PUB] India_runs_data_and_ai_challenge\[PUB] India_runs_data_and_ai_cha
+        llenge\India_runs_data_and_ai_challenge\STACK.md)
+  ⎿  Added 1 line, removed 1 line
+      110  | Install path | **Locked: uv** | Commit `requirements*.txt` t
+           oo. |
+      111  | Dataframe | **Locked: polars, pandas fallback** | Switch to 
+           pandas only if polars raises dev complexity; parquet contract 
+           unchanged. |
+      112  | Embedding model | **OPEN** | `bge-small-en-v1.5` vs `e5-smal
+           l-v2`; decide at indexing build, pin revision. |
+      113 -| Sandbox framework | **OPEN** | Streamlit vs Gradio on HF Spa
+          -ces; decide at demo build. |                                  
+      113 +| Sandbox framework | **Locked: Gradio** | On HF Spaces; nativ
+          +e fit + minimal boilerplate for the input -> output demo. |   
+      114  
+      115  > Per CLAUDE.md: if any pin or addition risks pulling network/
+           torch into the timed path, stop and ask before committing it.
+
+● Done. Decision log now reads:
+
+  ┌─────────────────┬─────────────────────────────────┐
+  │    Decision     │             Status              │
+  ├─────────────────┼─────────────────────────────────┤
+  │ Install path    │ Locked: uv                      │
+  ├─────────────────┼─────────────────────────────────┤
+  │ Dataframe       │ Locked: polars, pandas fallback │
+  ├─────────────────┼─────────────────────────────────┤
+  │ Sandbox         │ Locked: HF Spaces + Gradio      │
+  ├─────────────────┼─────────────────────────────────┤
+  │ Embedding model │ OPEN (bge-small vs e5-small)    │
+  └─────────────────┴─────────────────────────────────┘
+
+  Only the embedding model remains open, and that's correctly deferred to the
+  Phase 3 indexing build — nothing upstream depends on it.
+
+  Stack's settled enough to build on. Whenever you're ready, the next move is
+  the downstream expansion — turning the DESIGN phases into concrete specs (data
+  model field-by-field, exact feature definitions, the scoring formula with
+  initial weights). Just say the word.
+
+✻ Baked for 18s
+
+❯ ok anything left to add in @"[PUB] India_runs_data_and_ai_challenge/[PUB]     
+  India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/DESIGN.md"  
+  @"[PUB] India_runs_data_and_ai_challenge/[PUB]                                
+  India_runs_data_and_ai_challenge/India_runs_data_and_ai_challenge/STACK.md"   
+  ⎿  Read [PUB] India_runs_data_and_ai_challenge\[PUB] 
+     India_runs_data_and_ai_challenge\India_runs_data_and_ai_challenge\DESIGN.md
+     (272 lines)
+  ⎿  Read [PUB] India_runs_data_and_ai_challenge\[PUB] 
+     India_runs_data_and_ai_challenge\India_runs_data_and_ai_challenge\STACK.md 
+     (116 lines)
+
+● Re-read both. They're in good shape and consistent with each other on the big
+  things. I found one stale inconsistency, two genuine H3 gaps, and one 
+  dependency-hygiene note worth closing before we expand. Everything else is
+  correctly deferred to the expansion pass.
+
+  Here's what I'm fixing and why:
+
+  1. DESIGN §14 is stale vs. our locked decisions. It still says "Streamlit /
+  Colab" (we locked Gradio), says "Pinned requirements.txt" (singular — but
+  STACK's headline decision is the two-file split), and doesn't mention uv. This
+  is the kind of drift that looks sloppy at the interview.
+
+  2. The <participant_id>.csv filename (H3) appears nowhere. H3 requires the
+  submission file be named <participant_id>.csv, but DESIGN only ever says
+  submission.csv. That's a hard-reject trap if we forget to rename.
+
+  3. No explicit "always exactly 100 rows" guarantee. H3 hard-rejects on row
+  count (not 99, not 101). The design implies fillers exist but never states
+  that we always backfill to exactly 100 from the shortlist if DQ/honeypot
+  penalties thin the strong set. Worth making explicit since it's
+  disqualification-grade.
+
+  4. Gradio dependency hygiene. Gradio is a sandbox wrapper dep — it must not be
+  imported by rank.py or it muddies the clean-runtime story. One-line note.
+
+  Applying these now:
+
+● Update([PUB] India_runs_data_and_ai_challenge\[PUB] India_runs_data_and_ai_cha
+        llenge\India_runs_data_and_ai_challenge\DESIGN.md)
+  ⎿  Added 2 lines, removed 1 line
+      232  ## 12. Phase 7 — Assembly & validation (ONLINE -> output)
+      233  
+      234  - Take top-100 by score; assign ranks 1-100; enforce non-incre
+           asing score.
+      235 -- Write `submission.csv`: `candidate_id,rank,score,reasoning`,
+          - UTF-8.                                                       
+      235 +- **Always emit exactly 100 rows (H3).** The shortlist (K ~ 10
+          +00-2000) is far larger than 100, so 100 ranked rows are always
+          + available; if DQ/honeypot penalties thin the strong-fit set, 
+          +remaining slots are backfilled by the next-best shortlisted ca
+          +ndidates (framed honestly as low-confidence fillers per Sectio
+          +n 11). Never 99, never 101.                                   
+      236 +- Write the CSV `candidate_id,rank,score,reasoning`, UTF-8. Wo
+          +rking name `submission.csv`; **final submission file is named 
+          +`<participant_id>.csv`** (H3).                                
+      237  - **Last step of the run:** invoke `validate_submission.py` on
+            the output; fail the run loudly if it reports any error (H3).
+            Never ship unvalidated.
+      238  
+      239  ---
+
+● Update([PUB] India_runs_data_and_ai_challenge\[PUB] India_runs_data_and_ai_cha
+        llenge\India_runs_data_and_ai_challenge\DESIGN.md)
+  ⎿  Added 3 lines, removed 3 lines
+      252  
+      253  ## 14. Reproducibility & delivery (OFFLINE) — H5/H6
+      254  
+      255 -- `README.md`: single reproduce command, e.g. `python rank.py 
+          ---candidates ./candidates.jsonl --out ./submission.csv`, plus 
+          -the precompute commands and as-of date.                       
+      256 -- Pinned `requirements.txt`; committed `artifacts/` (or a one-
+          -command regenerator).                                         
+      255 +- `README.md`: single reproduce command, e.g. `python rank.py 
+          +--candidates ./candidates.jsonl.gz --out ./<participant_id>.cs
+          +v --as-of <DATE>`, plus the precompute commands and the pinned
+          + as-of date.                                                  
+      256 +- **Two pinned dependency sets** (STACK.md 0): `requirements.t
+          +xt` (runtime — no torch/network) and `requirements-precompute.
+          +txt` (offline). Installed via **uv**; committed `artifacts/` (
+          +or a one-command regenerator).                                
+      257  - `submission_metadata.yaml` at repo root from the bundle temp
+           late.
+      258 -- **Sandbox:** HF Spaces / Streamlit / Colab running the ranke
+          -r on a <=100 candidate sample within budget.                  
+      258 +- **Sandbox:** HF Spaces + Gradio running the ranker on a <=10
+          +0 candidate sample within budget.                             
+      259  - **Git history:** genuine commit-per-phase iteration, not a s
+           ingle dump.
+      260  - AI-tool usage declared honestly.
+      261  
+
+● Update([PUB] India_runs_data_and_ai_challenge\[PUB] India_runs_data_and_ai_cha
+        llenge\India_runs_data_and_ai_challenge\STACK.md)
+  ⎿  Added 1 line, removed 1 line
+      88  
+      89  | Concern | Choice | Why |
+      90  |---|---|---|
+      91 -| Sandbox | **HF Spaces + Gradio** | Free CPU tier; runs the ra
+         -nker on a <= 100-candidate sample within budget. Gradio chosen:
+         - native HF Spaces fit, minimal boilerplate for a single input -
+         -> output (run ranker -> show top-100 table) demo. |            
+      91 +| Sandbox | **HF Spaces + Gradio** | Free CPU tier; runs the ra
+         +nker on a <= 100-candidate sample within budget. Gradio chosen:
+         + native HF Spaces fit, minimal boilerplate for a single input -
+         +> output (run ranker -> show top-100 table) demo. **Gradio is a
+         + sandbox-only dep** (its own `requirements-sandbox.txt`); `rank
+         +.py` must never import it, so the timed runtime stays clean. | 
+      92  | Lint / format | **`ruff`** | Fast, single tool; optional but 
+          keeps the repo clean for review. |
+      93  | Tests | **`pytest`** | Gold-set ordering, H3 invariants, hone
+          ypot-rate assertion, validator pass. |
+      94  
+
+● Done. Both docs are now internally consistent and the H3 traps are captured.
+  Summary of what changed:
+
+  - DESIGN §12 — added the "always exactly 100 rows, backfill from shortlist"
+  guarantee and the <participant_id>.csv final-filename requirement.
+  - DESIGN §14 — synced to our locked decisions: Gradio (was Streamlit/Colab),
+  two-requirements split, uv, and a reproduce command that uses .gz + --as-of +
+  the participant-id output name.
+  - STACK §7 — noted Gradio is a sandbox-only dep (requirements-sandbox.txt)
+  that rank.py must never import.
+
+  What I deliberately did not add — these belong to the expansion pass, not the
+  high-level docs:
+
+  1. Schema field-name verification. The design references specific fields
+  (last_active_date, recruiter_response_rate, github_activity_score,
+  notice_period_days, willing_to_relocate, skill_assessment_scores) without
+  confirming they exist under redrob_signals vs profile in
+  candidate_schema.json. That's a verification task for when we build feature
+  extraction — not a doc edit, and per your memory note I won't crack open the
+  candidate pool to check; I'll read the schema/sample instead when we get
+  there.
+  2. The concrete as-of date value. Still correctly listed as <DATE> / open — we
+  pin it (likely max last_active_date in the pool, or the challenge date) when
+  building Phase 1.
+  3. Score scale. Raw float is fine for H3 (just needs to differentiate + be
+  monotonic); no normalization decision needed at this altitude.
+
+  The design and stack are solid enough to build against. The natural next step
+  is the downstream expansion — Phase 1 and 2 in concrete detail (the
+  schema-field mapping above is the first thing it forces us to resolve). Want
+  to start there?
+
+✻ Sautéed for 1m 43s
+
+❯ how does my semantic search complexity changes wrt three options , qdrant,    
+  faiss or zve, or npy file                                                     
+
+● Good question — let me separate two things that "complexity" conflates:
+  algorithmic complexity (query/build time) and operational complexity (what you
+  have to run and maintain). They point in opposite directions for our case.
+
+  First, the setup that matters: in our design, retrieval is one JD query vector
+  against N = 100K candidates, d = 384, producing a top-K shortlist. One query
+  per ranking run, not per-candidate. That single fact decides everything below.
+
+  (Quick check — "zve" I'm reading as a vector-engine in the Qdrant family,
+  possibly Zilliz/Milvus. If you meant something specific, tell me and I'll
+  adjust; it lands in the same bucket as Qdrant either way.)
+
+  Complexity comparison
+
+  ┌────────────┬────────────┬────────────────────────┬─────────────────────┐
+  │            │   npy +    │                        │  Qdrant / Zilliz    │
+  │            │   numpy    │   FAISS (in-process)   │     (server DB)     │
+  │            │  (exact)   │                        │                     │
+  ├────────────┼────────────┼────────────────────────┼─────────────────────┤
+  │            │ O(N·d)     │ Flat: O(N·d); IVF: ~`O │ HNSW: O(log N·d)    │
+  │ Query time │ exact —    │ ((nprobe/nlist)·N·d);  │ approximate         │
+  │            │ one matvec │ HNSW: O(log N·d)`      │                     │
+  ├────────────┼────────────┼────────────────────────┼─────────────────────┤
+  │            │ 100K×384 ≈ │ Same ms (Flat) or      │ Fast, but dominated │
+  │ For our N  │  38M MACs  │ faster (HNSW) — but    │  by network/seriali │
+  │            │ → ~ms via  │ gain is invisible at   │ zation round-trip   │
+  │            │ BLAS       │ this scale             │                     │
+  ├────────────┼────────────┼────────────────────────┼─────────────────────┤
+  │            │ O(1) —     │ IVF: k-means train     │ HNSW graph build +  │
+  │ Build      │ just save  │ O(N·d); HNSW: graph    │ persist, managed    │
+  │            │ the array  │ O(N·log N·d)           │                     │
+  ├────────────┼────────────┼────────────────────────┼─────────────────────┤
+  │            │ N·d·4 =    │                        │ Separate process;   │
+  │ Memory     │ 147 MB,    │ +1.5–2× for HNSW graph │ on-disk + RAM       │
+  │            │ exact      │                        │ working set         │
+  ├────────────┼────────────┼────────────────────────┼─────────────────────┤
+  │ Recall     │ 100% exact │ Tunable (95–99%);      │ Tunable approximate │
+  │            │            │ exact only in Flat     │                     │
+  ├────────────┼────────────┼────────────────────────┼─────────────────────┤
+  │ Operationa │ Zero — in- │ Library dep (heavy     │ High — separate     │
+  │ l          │ process,   │ wheel), in-process     │ service, ports,     │
+  │            │ no server  │                        │ lifecycle           │
+  ├────────────┼────────────┼────────────────────────┼─────────────────────┤
+  │ H1         │            │                        │ Risk — client talks │
+  │ (network   │ Safe       │ Safe (in-process)      │  over gRPC/HTTP;    │
+  │ OFF)       │            │                        │ even local is a     │
+  │            │            │                        │ socket call         │
+  └────────────┴────────────┴────────────────────────┴─────────────────────┘
+
+  What this means for us
+
+  At N = 100K with a single query, the algorithmic complexity difference is 
+  irrelevant. Brute-force exact search is a single BLAS matrix-vector product —
+  milliseconds, well inside the 5-min budget, and 147 MB is nothing against 16
+  GB. ANN's O(log N) advantage only pays off when N is in the millions or you're
+  serving many queries per second. We have neither.
+
+  So the axis that actually differs across your three options is operational 
+  complexity, and it runs backwards from sophistication:
+
+  - npy — nothing to run. In-process, network-off by construction → H1-safe for 
+  free. This is why DESIGN/STACK chose it.
+  - FAISS — still in-process (H1-safe) but adds a heavy dependency and a
+  build/training step you don't need yet. It's our documented scale-out lever 
+  for 200K+, not a v1 choice.
+  - Qdrant / Zilliz — a server. You gain persistence, metadata-filtered search,
+  CRUD, concurrency — production infra features. But the client is a network
+  call, which directly risks H1's network-OFF rule in rank.py, plus you now
+  operate a service. All overkill for a one-shot batch ranking of 100K vectors.
+
+  The honest framing for the interview: the JD lists "vector DB in production"
+  as a candidate must-have skill — what we look for in people. It is not what
+  the task needs. Picking Qdrant here would be cargo-culting production
+  architecture onto a 100K batch job; the disciplined choice is exact numpy,
+  with FAISS named as the threshold-crossing upgrade. That contrast (knowing
+  when not to reach for the DB) is itself a defensible engineering point.
+
+  Net: complexity-wise all three are fast enough; npy minimizes total complexity
+  and is the only one that's H1-safe with zero effort. Nothing about your scale
+  argues for the other two yet.
+
+✻ Baked for 49s
+
+❯ leave operational complecxity i am just asking abvout algorithmic also i also 
+  asked about zvec by alibaba also fifferent between flat ivf and hnsw in       
+  simple language                                                               
+● Dropping operational concerns — pure algorithmic complexity. N = number of
+  vectors, d = dimensions.
+
+  The three index types, in plain terms
+
+  Flat (brute force) — compare the query against every vector, keep the best. No
+  index, no shortcuts.
+  - Analogy: reading every book in the library to find the one you want.
+  - Query: O(N·d) — linear in the number of candidates. Exact, 100% recall.
+  - Build: nothing (O(1)).
+
+  IVF (Inverted File) — first cluster all vectors into nlist buckets (via
+  k-means). At query time, only scan the nprobe buckets whose centers are
+  closest to the query, ignore the rest.
+  - Analogy: the library is sorted into sections; you only walk the 2–3 shelves
+  most relevant to your topic instead of all of them.
+  - Query: O(nlist·d) to pick the nearest buckets + O((nprobe/nlist)·N·d) to
+  scan inside them. With nprobe ≪ nlist, that second term is a fraction of N —
+  sublinear in practice.
+  - Build: k-means training, O(N·d) (times a few iterations).
+  - Approximate: if the best match sits in a bucket you didn't probe, you miss
+  it. More nprobe → higher recall, slower.
+
+  HNSW (Hierarchical Navigable Small World) — build a multi-layer graph of
+  vectors connected to their neighbors; top layers are sparse "highways," lower
+  layers dense "local roads." Query starts at the top, greedily hops to closer
+  and closer neighbors, descending layers.
+  - Analogy: a highway network — take the expressway to the right city, then
+  local streets to the exact address. Or a skip-list for vectors.
+  - Query: O(log N · d) — the big win; barely grows as N explodes.
+  - Build: O(N·log N · d) — expensive, and the graph edges cost extra memory
+  (~1.5–2× the vectors).
+  - Approximate, but typically very high recall (95–99%).
+
+  Side by side
+
+  ┌──────┬──────────────┬────────────────────────────────┬──────────────────┐
+  │      │    Build     │             Query              │      Recall      │
+  ├──────┼──────────────┼────────────────────────────────┼──────────────────┤
+  │ Flat │ O(1)         │ O(N·d)                         │ exact (100%)     │
+  ├──────┼──────────────┼────────────────────────────────┼──────────────────┤
+  │ IVF  │ O(N·d)       │ ~`O((nprobe/nlist)·N·d)` —     │ approximate,     │
+  │      │ (k-means)    │ sublinear                      │ tunable          │
+  ├──────┼──────────────┼────────────────────────────────┼──────────────────┤
+  │ HNSW │ O(N·log N·d) │ O(log N·d)                     │ approximate,     │
+  │      │              │                                │ high             │
+  └──────┴──────────────┴────────────────────────────────┴──────────────────┘
+
+  The trade-off pattern: Flat pays nothing upfront and everything at query time;
+  HNSW pays a lot upfront (build + memory) to make queries near-constant; IVF
+  sits in between. (You'll often see IVF-PQ, where vectors are also compressed
+  via product quantization to shrink memory — separate axis, trades recall for
+  size.)
+
+  On "zvec by Alibaba"
+
+  I want to be honest rather than bluff: I don't have a confident, verified
+  record of an Alibaba product by exactly that name. Alibaba's known
+  vector-search work includes Proxima (DAMO Academy's engine) and vector support
+  in AnalyticDB and Tair — but I can't confirm "zvec" specifically, and I won't
+  invent details about it.
+
+  What I can say with confidence: algorithmically it won't be a fourth category.
+  Every production vector engine — Alibaba's, FAISS, Qdrant, Milvus — is built
+  on these same primitives or close variants (Flat, IVF, IVF-PQ, HNSW, or
+  DiskANN for SSD-resident graphs). So whatever zvec's exact internals, its
+  query complexity will fall into one of the rows above: linear (Flat),
+  sublinear (IVF-family), or logarithmic (HNSW/graph-family). The branding
+  differs; the Big-O doesn't.
+
+  If you can point me at a doc/link for zvec, I'll read it and tell you
+  precisely which family it uses and its actual complexity — want me to look it
+  up?
+
+✻ Churned for 34s
+
+❯ what is MAcs what is blas ?                                                   
+
+● MACs and BLAS — both came up when I said brute-force search is "38M MACs via
+  BLAS, ~milliseconds." Here's what each means.
+
+  MAC — Multiply-Accumulate
+
+  A MAC is one multiply-then-add operation: result = result + (a × b). It's the
+  atomic unit of work in almost all numerical/ML compute.
+
+  Why it's the natural unit here: comparing two vectors by cosine/dot-product
+  means multiplying them element-by-element and summing:
+
+  dot(q, v) = q[0]·v[0] + q[1]·v[1] + ... + q[383]·v[383]
+
+  For d = 384 dimensions, that's 384 multiply-adds = 384 MACs for one vector
+  comparison. Do that against all N = 100K candidates:
+
+  100,000 vectors × 384 dims = 38,400,000 MACs ≈ 38M MACs per query
+
+  So "38M MACs" is just "38 million multiply-add operations" — my way of
+  counting the actual arithmetic in one brute-force search. Hardware specs
+  (CPUs, GPUs) are often rated in FLOPs, and 1 MAC ≈ 2 FLOPs (one multiply + one
+  add), so 38M MACs ≈ 76M FLOPs. A modern CPU does billions of FLOPs per
+  second, which is why 76M finishes in milliseconds.
+
+  BLAS — Basic Linear Algebra Subprograms
+
+  BLAS is a standardized, decades-old set of highly optimized routines for
+  vector and matrix math — dot products, matrix-vector multiply, matrix-matrix
+  multiply. It's the engine under the hood of numpy, PyTorch, R, MATLAB,
+  basically all numerical computing.
+
+  The point: you don't write the 38M-MAC loop yourself in Python (which would be
+  slow). When you call jd_emb @ emb.T in numpy, numpy hands it to a BLAS
+  library — concrete implementations include OpenBLAS, Intel MKL, or Apple
+  Accelerate — written in tuned C/Fortran/assembly that:
+
+  - uses SIMD (does several multiply-adds in one CPU instruction),
+  - uses multiple cores,
+  - is cache-aware (arranges memory access so the CPU isn't waiting on RAM).
+
+  So a brute-force search that looks like a tiny one-line numpy operation is
+  actually BLAS executing those 38M MACs at near-peak hardware speed. That
+  combination — small arithmetic count (38M) run through a maximally-tuned
+  library (BLAS) — is exactly why I said exact search at 100K is milliseconds
+  and we don't need an ANN index.
+
+  One-line summary: a MAC is the single multiply-add that vector comparison is
+  made of; BLAS is the optimized library that runs millions of them per
+  millisecond. They're the why behind "brute force is fast enough at our scale."
+
+✻ Worked for 17s
+
+※ recap: We're designing the Redrob candidate ranking system; DESIGN.md and STACK.md are now complete and consistent, with stack decisions locked except the embedding model. Next action is starting the downstream expansion of Phase 1 and 2 (ingestion and feature extraction) in concrete detail. (disable recaps in /config)
+
+❯ what is recall and precision in simple terms                                  
+
+● Recall and Precision are two ways of measuring "did I find the right things?"
+  — they answer different questions.
+
+  The core idea
+
+  Imagine there are 10 truly good candidates hidden in the pool, and your system
+  returns a list of results.
+
+  - Precision = of the things I returned, how many were actually good?
+  → "How clean is my list?" (Did I waste slots on junk?)
+  - Recall = of all the good things that exist, how many did I find?
+  → "How complete is my catch?" (Did I miss any?)
+
+  Formulas, in plain words:
+  Precision = (good ones I returned) / (total I returned)
+  Recall    = (good ones I returned) / (total good ones that exist)
+
+  A concrete example
+
+  Pool has 10 truly good candidates. Your system returns 20 results, and 8 of 
+  them are actually good.
+
+  - Precision = 8 returned-good / 20 returned = 40% — less than half my list is
+  gold.
+  - Recall = 8 found / 10 that exist = 80% — I caught most of the good ones, but
+  missed 2.
+
+  The fishing-net analogy
+
+  You're fishing for tuna.
+  - High recall = a huge net — you catch almost every tuna in the sea, but also
+  haul in junk (low precision).
+  - High precision = a tiny, careful net — everything you catch is tuna, but you
+  miss most of them (low recall).
+
+  They trade off: casting wider improves recall but usually hurts precision, and
+  vice versa. That tension is why both are reported together.
+
+  Where this shows up in our project — two distinct places
+
+  1. ANN recall (the vector-index discussion):
+  When I said HNSW has "95–99% recall," it means: of the true nearest neighbors
+  brute-force would find, the approximate index finds 95–99% of them. Flat/numpy
+  is 100% recall because it checks everything — that's the whole reason we
+  don't lose anything by skipping ANN at our scale.
+
+  2. Ranking quality (the scoring metrics in CLAUDE.md):
+  The hackathon scores us partly on P@10 — Precision at 10 = of your top 10
+  ranked candidates, how many are genuinely good fits. That's precision measured
+  on just the top slice of the list.
+
+  There's also a related cousin, NDCG, which is precision-flavored but
+  order-aware — it rewards putting the best candidates at rank 1–2, not just
+  somewhere in the top 10.
+
+  Why the asymmetry matters for our design
+
+  Our pipeline is two stages, and each stage cares about a different one:
+
+  - Stage 1 (retrieve the shortlist of ~1000–2000): optimize for recall. We must
+  not drop a good candidate here — once they're out of the shortlist, the
+  reranker can never recover them. A wide net is correct. (This is exactly the
+  "recall guard" in DESIGN 9.1 — we set K generously so plain-language good
+  candidates don't get missed.)
+  - Stage 7 (the final top-100, especially the top-10): optimize for precision.
+  Now every slot is precious; we want the list clean and the very best at the
+  top, because the scoring weights top-10 quality heavily.
+
+  So the design deliberately runs recall-first, then precision-first — cast a
+  wide net, then carefully sort the catch. That's the natural shape whenever you
+  can't afford to either miss good things early or show junk at the end.
+
+✻ Crunched for 23s
