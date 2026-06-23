@@ -20,28 +20,36 @@ Three facts drive every decision:
 
 ```
 OFFLINE  (precompute/ — unbounded time, may use network/local models)
+  --as-of DATE  (pinned for reproducibility; baked into temporal/recency features)
   candidates.jsonl.gz
-     -> [1] ingest + normalize        -> normalized.parquet
+     -> [1] ingest + normalize        -> normalized.parquet  (+ quarantine.jsonl for malformed rows)
      -> [2] feature extraction        -> features.parquet   (the core IP)
      -> [3] embeddings + BM25 index   -> emb.npy, bm25.pkl
   job_description.md
-     -> [0] JD rubric spec            -> jd_rubric.yaml (+ jd_emb.npy)
+     -> [0] JD rubric spec            -> jd_rubric.yaml, jd_emb.npy
+
+  eval/  (self-eval harness — Section 13)
+     gold mini-set + ablations
+     -> [E] tune weights & availability floor -> weights.yaml
+            ^________________________ reads features.parquet, scores gold set,
+                                      feeds tuned w1..w10 + floor back to [4b]
 
 ONLINE  (rank.py — <= 5 min, CPU only, network OFF)
-  load features.parquet + emb.npy + bm25.pkl + jd_rubric.yaml
-     -> [4a] hybrid retrieve top-K shortlist (BM25 + dense)
-     -> [4b] deep feature rerank  (fit x availability - penalties)
+  load features.parquet + emb.npy + bm25.pkl + jd_rubric.yaml + jd_emb.npy + weights.yaml
+     -> [4a] hybrid retrieve top-K shortlist (BM25 + dense, uses jd_emb.npy)
+     -> [4b] deep feature rerank  (fit x availability - penalties; weights from weights.yaml)
      -> [5]  honeypot/trap consistency layer
      -> [6]  grounded reasoning generation
-     -> [7]  top-100 CSV  -> run validate_submission.py
+     -> [7]  assemble: sort -> assign ranks 1-100 -> enforce non-increasing score (H3)
+             -> top-100 CSV -> run validate_submission.py
 ```
 
 Repo layout enforces the firewall:
 ```
 precompute/   build_features.py, build_index.py, build_rubric.py
 rank.py       the ONLY timed step; produces submission.csv
-artifacts/    features.parquet, emb.npy, bm25.pkl, jd_rubric.yaml  (committed or regenerated)
-eval/         gold set + self-eval harness
+artifacts/    features.parquet, emb.npy, bm25.pkl, jd_rubric.yaml, jd_emb.npy, weights.yaml  (committed or regenerated)
+eval/         gold set + self-eval harness (produces weights.yaml)
 ```
 
 ---
@@ -187,7 +195,7 @@ disqualifier_factor = product of soft-gates in [low..1.0] for each DQ in 4.3
 score = fit_raw * disqualifier_factor * availability_multiplier
 ```
 
-- Weights `w*` `[tunable]` via eval; initial guess emphasizes career-substance (w2, w3, w4) over skill-list and semantic (w1 moderate, w9 small).
+- Weights `w*` `[tunable]` via eval, loaded at runtime from `weights.yaml` (emitted by the eval harness, Section 13); initial guess emphasizes career-substance (w2, w3, w4) over skill-list and semantic (w1 moderate, w9 small).
 - Fully vectorized in numpy over the shortlist.
 - **Tie-break (matches validator):** secondary signal (e.g. availability) then `candidate_id` ascending, so equal scores never violate H3.
 
