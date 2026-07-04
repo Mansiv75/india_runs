@@ -1,8 +1,8 @@
 # DESIGN.md — Redrob Candidate Ranking System
 
-Design target for the Intelligent Candidate Discovery & Ranking Challenge. Read `CLAUDE.md` first — the hard constraints (H1-H6) bound everything here.
+Design target for a production-grade candidate discovery and ranking product, evolved from the Redrob hackathon prototype. `CLAUDE.md` captures the original competition constraints, but the product direction now prioritizes a maintainable service architecture, inspectable ranking quality, and iterative learning.
 
-This document is the thing we build to and defend at the Stage 5 interview. It encodes the JD as a machine-readable rubric, the feature set, the scoring formula, the trap/honeypot logic, and the reproducibility plan. Weights marked `[tunable]` are initial values to be set by the self-eval harness (Section 11), not magic numbers.
+This document is the thing we build to and defend as an engineering product. It encodes the JD as a machine-readable rubric, the feature set, the scoring formula, the trap/honeypot logic, the vector-search architecture, and the reproducibility plan. Weights marked `[tunable]` are initial values to be set by the self-eval harness (Section 13), not magic numbers.
 
 ---
 
@@ -12,7 +12,7 @@ Three facts drive every decision:
 
 1. **No ground-truth labels.** Scores are hidden until close. This is therefore an **unsupervised, JD-derived heuristic ranking** problem, not supervised learning-to-rank. The intelligence is in the rubric (Section 4), not in a trained model. Any learned component would need self-labeled data and is out of scope for v1.
 2. **Rank what the JD *means*, not what it *says*.** Keyword/embedding match is an explicitly built trap. The core is **structured reasoning over career history**; embeddings are a supporting signal and a retrieval leg only.
-3. **Hard compute firewall (H1).** Everything expensive is OFFLINE precompute (no time limit). The ONLINE `rank.py` step (<= 5 min, CPU, no network) only loads compact artifacts, scores vectorized, sorts, writes CSV, self-validates.
+3. **Service boundary for expensive work.** Embedding generation, feature extraction, and indexing run as explicit build/indexing jobs. The online ranking path stays fast by querying prebuilt artifacts and Qdrant, then reranking with structured features.
 
 ---
 
@@ -24,7 +24,7 @@ OFFLINE  (precompute/ — unbounded time, may use network/local models)
   candidates.jsonl.gz
      -> [1] ingest + normalize        -> normalized.parquet  (+ quarantine.jsonl for malformed rows)
      -> [2] feature extraction        -> features.parquet   (the core IP)
-     -> [3] embeddings + BM25 index   -> emb.npy, bm25.pkl
+     -> [3] embeddings + indexes      -> Qdrant collection (vectors+payload), bm25.pkl
   job_description.md
      -> [0] JD rubric spec            -> jd_rubric.yaml, jd_emb.npy
 
@@ -34,22 +34,25 @@ OFFLINE  (precompute/ — unbounded time, may use network/local models)
             ^________________________ reads features.parquet, scores gold set,
                                       feeds tuned w1..w10 + floor back to [4b]
 
-ONLINE  (rank.py — <= 5 min, CPU only, network OFF)
-  load features.parquet + emb.npy + bm25.pkl + jd_rubric.yaml + jd_emb.npy + weights.yaml
-     -> [4a] hybrid retrieve top-K shortlist (BM25 + dense, uses jd_emb.npy)
+ONLINE  (ranking service / CLI)
+  load features.parquet + bm25.pkl + jd_rubric.yaml + jd_emb.npy + weights.yaml
+  query Qdrant candidate collection
+     -> [4a] hybrid retrieve top-K shortlist (BM25 + dense Qdrant vector search, query=jd_emb)
      -> [4b] deep feature rerank  (fit x availability - penalties; weights from weights.yaml)
      -> [5]  honeypot/trap consistency layer
      -> [6]  grounded reasoning generation
-     -> [7]  assemble: sort -> assign ranks 1-100 -> enforce non-increasing score (H3)
-             -> top-100 CSV -> run validate_submission.py
+     -> [7]  assemble: sort -> return ranked candidates through API/CLI
+             -> optional CSV export for batch workflows
 ```
 
-Repo layout enforces the firewall:
+Repo layout keeps indexing, ranking, and product APIs separate:
 ```
 precompute/   build_features.py, build_index.py, build_rubric.py
-rank.py       the ONLY timed step; produces submission.csv
-artifacts/    features.parquet, emb.npy, bm25.pkl, jd_rubric.yaml, jd_emb.npy, weights.yaml  (committed or regenerated)
+rank.py       local CLI ranking entrypoint; useful for reproducible experiments
+app/          API/service layer for product workflows
+artifacts/    features.parquet, bm25.pkl, jd_rubric.yaml, jd_emb.npy, weights.yaml  (committed or regenerated)
 eval/         gold set + self-eval harness (produces weights.yaml)
+infra/        Docker Compose and service config for Qdrant and app dependencies
 ```
 
 ---
@@ -142,8 +145,10 @@ Output: `features.parquet`, one row per candidate, all features + raw fields the
 
 ## 7. Phase 3 — Representation & indexing (OFFLINE)
 
-- **Dense:** local CPU sentence-transformer (e.g. BGE-small / E5-small class) over `summary` + concatenated `career_history[].description`. Store `emb.npy` (float32, L2-normalized). Embed the JD must-have block -> `jd_emb.npy`.
+- **Dense:** **EmbeddingGemma-300m** (local/offline encode for v1) over `summary` + concatenated `career_history[].description`, **Matryoshka-truncated to 256-dim**, float32 + L2-normalized. Store vectors in a **Qdrant collection** with candidate metadata as payload: `candidate_id`, normalized title/company/location fields, key feature IDs, and any lightweight filters needed for retrieval.
 - **Lexical:** BM25 over the same text -> `bm25.pkl`.
+- **Qdrant:** local Docker service for development, managed or self-hosted Qdrant for production. Collection schema must be versioned, recreated by `precompute/build_index.py`, and validated with a small smoke test after every rebuild.
+- **Query vectors:** embed the JD must-have block -> `jd_emb.npy` for local experiments; product API can also embed arbitrary job descriptions through the embedding service, then query Qdrant.
 - Embeddings are a **retrieval leg and a supporting rerank feature**, never the decider — deliberate, to dodge the keyword/embedding trap.
 
 ---
@@ -166,9 +171,9 @@ Example shape: a 6-months-inactive, 5%-response candidate lands near the floor; 
 ## 9. Phase 4 — Retrieval + scoring (ONLINE, multi-step)
 
 ### 9.1 Stage 1 — hybrid retrieve (top-K shortlist)
-- Lexical BM25(JD must-haves) and dense cosine(jd_emb, emb) over all 100K.
+- Lexical BM25(JD must-haves) and dense search over all candidates via **Qdrant vector search** (query = `jd_emb` or an embedding generated for the supplied JD). Qdrant handles the vector leg; BM25 remains local initially and can later move behind a search service if needed.
 - Combine via reciprocal-rank fusion -> shortlist top-K (`K ~ 1000-2000` [tunable]).
-- Purpose: production-faithful, scales to 200K. **Recall guard:** because plain-language Tier-5s may be lexically thin, K is set generously and dense recall is checked in eval (Section 11). If recall risk shows up, raise K or union in a structured-prefilter leg.
+- Purpose: production-faithful and scalable beyond a local artifact. **Recall guard:** because plain-language strong candidates may be lexically thin, K is set generously and dense recall is checked in eval (Section 13). If recall risk shows up, raise K, adjust Qdrant search params, or union in a structured-prefilter leg.
 
 ### 9.2 Stage 2 — deep rerank (the JD-fit score)
 For each shortlisted candidate:
@@ -197,7 +202,7 @@ score = fit_raw * disqualifier_factor * availability_multiplier
 
 - Weights `w*` `[tunable]` via eval, loaded at runtime from `weights.yaml` (emitted by the eval harness, Section 13); initial guess emphasizes career-substance (w2, w3, w4) over skill-list and semantic (w1 moderate, w9 small).
 - Fully vectorized in numpy over the shortlist.
-- **Tie-break (matches validator):** secondary signal (e.g. availability) then `candidate_id` ascending, so equal scores never violate H3.
+- **Tie-break:** secondary signal (e.g. availability) then `candidate_id` ascending, so equal scores are deterministic.
 
 ---
 
@@ -231,42 +236,42 @@ Each `reasoning` cell is assembled to satisfy all six Stage-4 checks:
 
 ## 12. Phase 7 — Assembly & validation (ONLINE -> output)
 
-- Take top-100 by score; assign ranks 1-100; enforce non-increasing score.
-- **Always emit exactly 100 rows (H3).** The shortlist (K ~ 1000-2000) is far larger than 100, so 100 ranked rows are always available; if DQ/honeypot penalties thin the strong-fit set, remaining slots are backfilled by the next-best shortlisted candidates (framed honestly as low-confidence fillers per Section 11). Never 99, never 101.
-- Write the CSV `candidate_id,rank,score,reasoning`, UTF-8. Working name `submission.csv`; **final submission file is named `<participant_id>.csv`** (H3).
-- **Last step of the run:** invoke `validate_submission.py` on the output; fail the run loudly if it reports any error (H3). Never ship unvalidated.
+- Take top-N by score; assign ranks 1-N; enforce non-increasing score.
+- API responses return structured ranking objects: `candidate_id`, `rank`, `score`, `reasoning`, feature highlights, caveats, and retrieval provenance.
+- CSV export remains useful for batch review and experiments. For compatibility with the original hackathon validator, keep an optional export mode that writes `candidate_id,rank,score,reasoning`.
+- Validation becomes product QA: schema checks, deterministic ordering, grounded-reasoning checks, and regression tests against labeled examples.
 
 ---
 
-## 13. Evaluation harness (OFFLINE) — replaces the missing leaderboard
+## 13. Evaluation harness — product quality loop
 
-No ground truth exists, so we validate by methodology, not by submitting:
-- **Gold mini-set:** hand-label ~30-50 candidates from `sample_candidates.json` and constructed cases as clear-fit / clear-nonfit / honeypot. Sanity-check that the ranker orders them correctly.
+No large ground truth exists initially, so we validate by methodology and build feedback loops:
+- **Gold mini-set:** hand-label ~30-50 candidates from `sample_candidates.json` and constructed cases as clear-fit / clear-nonfit / honeypot. Grow this set continuously as the product is used.
 - **Retrieval recall check:** confirm known good candidates survive Stage-1 shortlisting (guards the multi-step recall risk in 9.1).
 - **Ablations:** toggle each weight group; confirm career-substance dominates skill-keywords (the anti-trap thesis).
-- **Honeypot monitor:** report flagged-honeypot rate in top-100 every run.
+- **Honeypot monitor:** report flagged-honeypot-style rate in top-N every run.
 - **Reasoning spot-check:** sample 10 rows, run them against the six checks manually (mirrors Stage 4).
-- **Budget check:** time `rank.py` end-to-end on a 16 GB CPU box; assert < 5 min.
+- **Latency check:** measure indexing time, Qdrant query latency, rerank latency, and end-to-end API latency separately.
+- **Recruiter feedback loop:** store shortlists, accepted/rejected candidates, and manual notes as future evaluation data.
 
 ---
 
-## 14. Reproducibility & delivery (OFFLINE) — H5/H6
+## 14. Reproducibility & delivery
 
-- `README.md`: single reproduce command, e.g. `python rank.py --candidates ./candidates.jsonl.gz --out ./<participant_id>.csv --as-of <DATE>`, plus the precompute commands and the pinned as-of date.
-- **Two pinned dependency sets** (STACK.md 0): `requirements.txt` (runtime — no torch/network) and `requirements-precompute.txt` (offline). Installed via **uv**; committed `artifacts/` (or a one-command regenerator).
-- `submission_metadata.yaml` at repo root from the bundle template.
-- **Sandbox:** HF Spaces + Gradio running the ranker on a <=100 candidate sample within budget.
-- **Git history:** genuine commit-per-phase iteration, not a single dump.
-- AI-tool usage declared honestly.
+- `README.md`: local development commands for Qdrant, indexing, ranking, API startup, and tests.
+- **Separate dependency groups** (STACK.md 0): API/runtime, indexing/embedding, development/test. Installed via **uv** and locked.
+- `docker-compose.yml`: local Qdrant plus the application services needed for development.
+- **Artifacts:** small reproducible artifacts may be committed; large indexes live in Qdrant and are rebuilt from source data.
+- **Versioning:** ranking config, embedding model, Qdrant collection schema, and feature extraction code are versioned together.
+- AI-tool usage declared honestly when relevant.
 
 ---
 
 ## 15. Open items / risks (decide during build)
 
 - **Build sequencing** (thin vertical slice vs full feature depth) — deferred per earlier decision; choose when coding starts.
-- **Embedding model choice** — pick a CPU-fast model whose 100K encode fits the offline budget; lock the version for reproducibility.
+- **Embedding model choice** — starting point: EmbeddingGemma-300m at 256-dim (MRL); pin revision + accept Gemma license. 768-dim is the recall lever if eval needs it.
+- **Qdrant deployment mode** — decide between local Docker for learning, self-hosted production, or managed Qdrant Cloud once the app needs real deployment.
 - **Weight setting** — all `[tunable]` weights come from the eval harness, not hand-waving; document the final values and the rationale for the interview.
 - **Company lexicon coverage** — services/consulting list is non-exhaustive; back it with the `industry` field and review misses in eval.
 - **Soft-gate vs hard-gate on disqualifiers** — starting soft (multiplicative factor) to tolerate noisy extraction; revisit if DQ profiles leak into top-100.
-
-> Per CLAUDE.md: before any step that risks H1-H6, stop and ask.
